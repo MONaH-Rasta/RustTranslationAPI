@@ -6,7 +6,7 @@ using Oxide.Core;
 
 namespace Oxide.Plugins
 {
-    [Info("Rust Translation API", "Arainrr", "1.0.2")]
+    [Info("Rust Translation API", "Arainrr", "1.0.3")]
     [Description("Provides translation APIs for Rust items, holdables, deployables, etc")]
     public class RustTranslationAPI : RustPlugin
     {
@@ -106,7 +106,10 @@ namespace Oxide.Plugins
 
         private TranslationFiles GetTranslationFiles(string language)
         {
-            if (string.IsNullOrEmpty(language)) return null;
+            if (string.IsNullOrEmpty(language))
+            {
+                return null;
+            }
             if (language.Length == 17 && language.IsSteamId())
             {
                 language = lang.GetLanguage(language);
@@ -117,6 +120,23 @@ namespace Oxide.Plugins
                 return null;
             }
             return translationFiles;
+        }
+
+        private static bool IsValidShortPrefabName(ref string shortPrefabName)
+        {
+            if (string.IsNullOrEmpty(shortPrefabName))
+            {
+                return false;
+            }
+            if (shortPrefabName.Contains('/') || shortPrefabName.Contains('\\'))
+            {
+                shortPrefabName = Utility.GetFileNameWithoutExtension(shortPrefabName);
+                if (string.IsNullOrEmpty(shortPrefabName))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static string GetItemShortNameTranslation(TranslationFiles translationFiles, string itemShortName)
@@ -265,11 +285,12 @@ namespace Oxide.Plugins
                 {
                     continue;
                 }
+                var shortPrefabName = Utility.GetFileNameWithoutExtension(monumentInfo.name);
                 if (isEnglish)
                 {
-                    if (!translationFiles.monumentNameTranslations.ContainsKey(monumentInfo.name))
+                    if (!translationFiles.monumentNameTranslations.ContainsKey(shortPrefabName))
                     {
-                        translationFiles.monumentNameTranslations.Add(monumentInfo.name, monumentInfo.displayPhrase.english);
+                        translationFiles.monumentNameTranslations.Add(shortPrefabName, monumentInfo.displayPhrase.english);
                     }
                 }
                 else
@@ -278,9 +299,9 @@ namespace Oxide.Plugins
                     var token = monumentInfo.displayPhrase.token;
                     if (translationFiles.translations.TryGetValue(token, out translation))
                     {
-                        if (!translationFiles.monumentNameTranslations.ContainsKey(monumentInfo.name))
+                        if (!translationFiles.monumentNameTranslations.ContainsKey(shortPrefabName))
                         {
-                            translationFiles.monumentNameTranslations.Add(monumentInfo.name, translation);
+                            translationFiles.monumentNameTranslations.Add(shortPrefabName, translation);
                         }
                     }
                     else
@@ -299,11 +320,12 @@ namespace Oxide.Plugins
                 var construction = entry.Value.Find<Construction>().FirstOrDefault();
                 if (construction != null && construction.deployable == null && construction.info.name.IsValid())
                 {
+                    var shortPrefabName = Utility.GetFileNameWithoutExtension(construction.fullName);
                     if (isEnglish)
                     {
-                        if (!translationFiles.constructionTranslations.ContainsKey(construction.fullName))
+                        if (!translationFiles.constructionTranslations.ContainsKey(shortPrefabName))
                         {
-                            translationFiles.constructionTranslations.Add(construction.fullName, construction.info.name.english);
+                            translationFiles.constructionTranslations.Add(shortPrefabName, construction.info.name.english);
                         }
                     }
                     else
@@ -312,9 +334,9 @@ namespace Oxide.Plugins
                         var token = construction.info.name.token;
                         if (translationFiles.translations.TryGetValue(token, out translation))
                         {
-                            if (!translationFiles.constructionTranslations.ContainsKey(construction.fullName))
+                            if (!translationFiles.constructionTranslations.ContainsKey(shortPrefabName))
                             {
-                                translationFiles.constructionTranslations.Add(construction.fullName, translation);
+                                translationFiles.constructionTranslations.Add(shortPrefabName, translation);
                             }
                         }
                         else
@@ -365,58 +387,42 @@ namespace Oxide.Plugins
 
         private Dictionary<string, string> GetTranslations(string language)
         {
-            var translationFiles = GetTranslationFiles(language);
-            if (translationFiles == null) return null;
-            return translationFiles.translations;
+            return GetTranslationFiles(language)?.translations;
         }
 
         private Dictionary<int, string> GetItemIDTranslations(string language)
         {
-            var translationFiles = GetTranslationFiles(language);
-            if (translationFiles == null) return null;
-            return translationFiles.itemIDTranslations;
+            return GetTranslationFiles(language)?.itemIDTranslations;
         }
 
         private Dictionary<string, string> GetItemShortNameTranslations(string language)
         {
-            var translationFiles = GetTranslationFiles(language);
-            if (translationFiles == null) return null;
-            return translationFiles.itemShortNameTranslations;
+            return GetTranslationFiles(language)?.itemShortNameTranslations;
         }
 
         private Dictionary<string, string> GetItemDisplayNameTranslations(string language)
         {
-            var translationFiles = GetTranslationFiles(language);
-            if (translationFiles == null) return null;
-            return translationFiles.itemDisplayNameTranslations;
+            return GetTranslationFiles(language)?.itemDisplayNameTranslations;
         }
 
         private Dictionary<string, string> GetDeployableShortPrefabNameTranslations(string language)
         {
-            var translationFiles = GetTranslationFiles(language);
-            if (translationFiles == null) return null;
-            return translationFiles.deployableShortPrefabNameTranslations;
+            return GetTranslationFiles(language)?.deployableShortPrefabNameTranslations;
         }
 
         private Dictionary<string, string> GetHoldableShortPrefabNameTranslations(string language)
         {
-            var translationFiles = GetTranslationFiles(language);
-            if (translationFiles == null) return null;
-            return translationFiles.holdableShortPrefabNameTranslations;
+            return GetTranslationFiles(language)?.holdableShortPrefabNameTranslations;
         }
 
         private Dictionary<string, string> GetMonumentTranslations(string language)
         {
-            var translationFiles = GetTranslationFiles(language);
-            if (translationFiles == null) return null;
-            return translationFiles.monumentNameTranslations;
+            return GetTranslationFiles(language)?.monumentNameTranslations;
         }
 
         private Dictionary<string, string> GetConstructionTranslations(string language)
         {
-            var translationFiles = GetTranslationFiles(language);
-            if (translationFiles == null) return null;
-            return translationFiles.constructionTranslations;
+            return GetTranslationFiles(language)?.constructionTranslations;
         }
 
         #endregion Translation Files
@@ -504,7 +510,10 @@ namespace Oxide.Plugins
 
         private string GetDeployableTranslation(string language, string deployable)
         {
-            if (string.IsNullOrEmpty(deployable)) return null;
+            if (!IsValidShortPrefabName(ref deployable))
+            {
+                return null;
+            }
             var translationFiles = GetTranslationFiles(language);
             if (translationFiles == null)
             {
@@ -520,7 +529,10 @@ namespace Oxide.Plugins
 
         private string GetHoldableTranslation(string language, string holdable)
         {
-            if (string.IsNullOrEmpty(holdable)) return null;
+            if (!IsValidShortPrefabName(ref holdable))
+            {
+                return null;
+            }
             var translationFiles = GetTranslationFiles(language);
             if (translationFiles == null)
             {
@@ -546,7 +558,10 @@ namespace Oxide.Plugins
 
         private string GetMonumentTranslation(string language, string monumentName)
         {
-            if (string.IsNullOrEmpty(monumentName)) return null;
+            if (!IsValidShortPrefabName(ref monumentName))
+            {
+                return null;
+            }
             var translationFiles = GetTranslationFiles(language);
             if (translationFiles == null)
             {
@@ -562,7 +577,7 @@ namespace Oxide.Plugins
 
         #endregion Monument Translation
 
-        #region Monument Translation
+        #region Construction Translation
 
         private string GetConstructionTranslation(string language, Construction construction)
         {
@@ -570,23 +585,26 @@ namespace Oxide.Plugins
             return GetConstructionTranslation(language, construction.fullName);
         }
 
-        private string GetConstructionTranslation(string language, string prefabName)
+        private string GetConstructionTranslation(string language, string shortPrefabName)
         {
-            if (string.IsNullOrEmpty(prefabName)) return null;
+            if (!IsValidShortPrefabName(ref shortPrefabName))
+            {
+                return null;
+            }
             var translationFiles = GetTranslationFiles(language);
             if (translationFiles == null)
             {
                 return null;
             }
             string translation;
-            if (!translationFiles.constructionTranslations.TryGetValue(prefabName, out translation))
+            if (!translationFiles.constructionTranslations.TryGetValue(shortPrefabName, out translation))
             {
                 return null;
             }
             return translation;
         }
 
-        #endregion Monument Translation
+        #endregion Construction Translation
 
         #endregion Translation
 
