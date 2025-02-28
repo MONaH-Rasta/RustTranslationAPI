@@ -6,7 +6,7 @@ using Oxide.Core;
 
 namespace Oxide.Plugins
 {
-    [Info("Rust Translation API", "Arainrr", "1.0.0")]
+    [Info("Rust Translation API", "Arainrr", "1.0.1")]
     [Description("Provides translation APIs for Rust items, holdables, deployables, etc")]
     public class RustTranslationAPI : RustPlugin
     {
@@ -14,14 +14,15 @@ namespace Oxide.Plugins
 
         #region Fields
 
-        private bool _initialized;
+        private bool _serverInitialized;
+        private bool _translationsInitialized;
         private readonly Dictionary<string, TranslationFiles> _translationFilesMap = new Dictionary<string, TranslationFiles>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Dictionary<string, string>> _translationsOverride = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
 
         private const string English = "en";
         private const string Wildcard = "*";
 
-        private static readonly string[] SupportedLanguages =
+        private static readonly List<string> SupportedLanguages = new List<string>
         {
             "af", "ar", "ca", "cs", "da", "de", "el", "en-PT", "es-ES", "fi", "fr", "he", "hu", "it", "ja", "ko", "nl", "no", "pl", "pt-BR", "pt-PT", "ro", "ru", "sr", "sv-SE", "tr", "uk", "vi", "zh-CN", "zh-TW", English
         };
@@ -32,6 +33,13 @@ namespace Oxide.Plugins
 
         private void OnServerInitialized()
         {
+            _serverInitialized = true;
+            InitializeFiles();
+        }
+
+        private void OnTranslationsDownloaded()
+        {
+            if (!_serverInitialized) return;
             InitializeFiles();
         }
 
@@ -76,9 +84,10 @@ namespace Oxide.Plugins
                 UpdateDeployableAndHoldableTranslations(translationFiles);
                 UpdateMonumentTranslations(translationFiles, isEnglish);
                 UpdateConstructionTranslations(translationFiles, isEnglish);
+                _translationFilesMap.Remove(language);
                 _translationFilesMap.Add(language, translationFiles);
             }
-            _initialized = true;
+            _translationsInitialized = true;
             Interface.CallHook("OnTranslationsInitialized");
         }
 
@@ -148,7 +157,6 @@ namespace Oxide.Plugins
             {
                 if (!itemDefinition.displayName.IsValid())
                 {
-                    //PrintError($"{itemDefinition.shortname}({itemDefinition.displayName.english}) for displayName is invalid.");
                     continue;
                 }
                 if (isEnglish)
@@ -253,7 +261,10 @@ namespace Oxide.Plugins
         {
             foreach (var monumentInfo in TerrainMeta.Path.Monuments)
             {
-                if (monumentInfo == null || !monumentInfo.displayPhrase.IsValid()) continue;
+                if (!monumentInfo.displayPhrase.IsValid())
+                {
+                    continue;
+                }
                 if (isEnglish)
                 {
                     if (!translationFiles.monumentNameTranslations.ContainsKey(monumentInfo.name))
@@ -278,7 +289,7 @@ namespace Oxide.Plugins
                     }
                 }
             }
-            SaveData(translationFiles.language, "MonumentNameTranslations", translationFiles.monumentNameTranslations);
+            SaveData(translationFiles.language, "MonumentTranslations", translationFiles.monumentNameTranslations);
         }
 
         private void UpdateConstructionTranslations(TranslationFiles translationFiles, bool isEnglish)
@@ -322,7 +333,9 @@ namespace Oxide.Plugins
 
         #region API
 
-        private bool IsInitialized() => _initialized;
+        private bool IsInitialized() => _translationsInitialized;
+
+        private bool IsSupportedLanguage(string language) => SupportedLanguages.Contains(language);
 
         #region Translation
 
@@ -392,7 +405,7 @@ namespace Oxide.Plugins
             return translationFiles.holdableShortPrefabNameTranslations;
         }
 
-        private Dictionary<string, string> GetMonumentNameTranslations(string language)
+        private Dictionary<string, string> GetMonumentTranslations(string language)
         {
             var translationFiles = GetTranslationFiles(language);
             if (translationFiles == null) return null;
@@ -541,6 +554,32 @@ namespace Oxide.Plugins
             }
             string translation;
             if (!translationFiles.monumentNameTranslations.TryGetValue(monumentName, out translation))
+            {
+                return null;
+            }
+            return translation;
+        }
+
+        #endregion Monument Translation
+
+        #region Monument Translation
+
+        private string GetConstructionTranslation(string language, Construction construction)
+        {
+            if (construction == null) return null;
+            return GetConstructionTranslation(language, construction.fullName);
+        }
+
+        private string GetConstructionTranslation(string language, string prefabName)
+        {
+            if (string.IsNullOrEmpty(prefabName)) return null;
+            var translationFiles = GetTranslationFiles(language);
+            if (translationFiles == null)
+            {
+                return null;
+            }
+            string translation;
+            if (!translationFiles.constructionTranslations.TryGetValue(prefabName, out translation))
             {
                 return null;
             }
