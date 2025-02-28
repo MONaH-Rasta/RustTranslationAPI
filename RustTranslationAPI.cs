@@ -6,7 +6,7 @@ using Oxide.Core;
 
 namespace Oxide.Plugins
 {
-    [Info("Rust Translation API", "Arainrr", "1.0.1")]
+    [Info("Rust Translation API", "Arainrr", "1.0.2")]
     [Description("Provides translation APIs for Rust items, holdables, deployables, etc")]
     public class RustTranslationAPI : RustPlugin
     {
@@ -335,7 +335,7 @@ namespace Oxide.Plugins
 
         private bool IsInitialized() => _translationsInitialized;
 
-        private bool IsSupportedLanguage(string language) => SupportedLanguages.Contains(language);
+        private bool IsSupportedLanguage(string language) => SupportedLanguages.Contains(language, StringComparer.OrdinalIgnoreCase);
 
         #region Translation
 
