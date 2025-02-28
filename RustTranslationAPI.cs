@@ -1,12 +1,19 @@
-﻿using System;
+﻿//Reference:Ionic.Zip.Reduced
+using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text;
+using Ionic.Zip;
 using Newtonsoft.Json;
 using Oxide.Core;
+using UnityEngine;
+using UnityEngine.Networking;
 
 namespace Oxide.Plugins
 {
-    [Info("Rust Translation API", "Arainrr", "1.0.3")]
+    [Info("Rust Translation API", "Arainrr", "1.1.0")]
     [Description("Provides translation APIs for Rust items, holdables, deployables, etc")]
     public class RustTranslationAPI : RustPlugin
     {
@@ -14,8 +21,11 @@ namespace Oxide.Plugins
 
         #region Fields
 
-        private bool _serverInitialized;
+        private static RustTranslationAPI _instance;
+
         private bool _translationsInitialized;
+        private readonly StringBuilder _logger = new StringBuilder();
+        private readonly TranslationsDownloader _downloader = new TranslationsDownloader();
         private readonly Dictionary<string, TranslationFiles> _translationFilesMap = new Dictionary<string, TranslationFiles>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Dictionary<string, string>> _translationsOverride = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
 
@@ -27,31 +37,83 @@ namespace Oxide.Plugins
             "af", "ar", "ca", "cs", "da", "de", "el", "en-PT", "es-ES", "fi", "fr", "he", "hu", "it", "ja", "ko", "nl", "no", "pl", "pt-BR", "pt-PT", "ro", "ru", "sr", "sv-SE", "tr", "uk", "vi", "zh-CN", "zh-TW", English
         };
 
+        private class TranslationFiles
+        {
+            public string language;
+            public readonly Dictionary<string, string> translations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<int, string> itemIDTranslations = new Dictionary<int, string>();
+            public readonly Dictionary<string, string> itemShortNameTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<string, string> itemDisplayNameTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<string, string> deployableShortPrefabNameTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<string, string> holdableShortPrefabNameTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<string, string> monumentNameTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<string, string> constructionTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
         #endregion Fields
 
         #region Oxide Hooks
 
-        private void OnServerInitialized()
+        private void Init()
         {
-            _serverInitialized = true;
-            InitializeFiles();
+            _instance = this;
         }
 
-        private void OnTranslationsDownloaded()
+        private void OnTerrainInitialized()
         {
-            if (!_serverInitialized) return;
-            InitializeFiles();
+            _downloader.Initialize();
+        }
+
+        private void OnServerInitialized(bool initial)
+        {
+            if (initial)
+            {
+                if (!_translationsInitialized && IsTranslationsExists())
+                {
+                    InitializeFiles();
+                }
+            }
+            else
+            {
+                if (!IsTranslationsExists())
+                {
+                    _downloader.Initialize();
+                }
+                else
+                {
+                    InitializeFiles();
+                }
+            }
+        }
+
+        private void Unload()
+        {
+            _downloader.StopDownload();
+            _instance = null;
         }
 
         #endregion Oxide Hooks
 
         #region Methods
 
+        private void OnTranslationsDownloaded()
+        {
+            _downloader.Initialize();
+        }
+
+        private void OnTranslationsDownloadFailed()
+        {
+            if (!_translationsInitialized)
+            {
+                InitializeFiles();
+            }
+        }
+
         private void InitializeFiles()
         {
             foreach (var language in SupportedLanguages)
             {
-                bool isEnglish = language == English;
+                var isEnglish = language == English;
                 Dictionary<string, string> translations = null;
                 try
                 {
@@ -79,43 +141,44 @@ namespace Oxide.Plugins
                 {
                     translationFiles.translations.Add(entry.Key, entry.Value);
                 }
+
                 UpdateTranslations(translationFiles);
                 UpdateItemTranslations(translationFiles, isEnglish);
                 UpdateDeployableAndHoldableTranslations(translationFiles);
                 UpdateMonumentTranslations(translationFiles, isEnglish);
                 UpdateConstructionTranslations(translationFiles, isEnglish);
+
                 _translationFilesMap.Remove(language);
                 _translationFilesMap.Add(language, translationFiles);
             }
+            if (_logger.Length > 0)
+            {
+                PrintError("There are some translations not found, please see the log file for details.");
+                LogToFile("not_found", _logger.ToString(), this);
+                _logger.Clear();
+            }
             _translationsInitialized = true;
-            Interface.CallHook("OnTranslationsInitialized");
+
+            //Make sure that '[PluginReference] Plugin RustTranslationAPI' is not null when the OnTranslationsInitialized hook is called.
+            NextTick(() => Interface.CallHook("OnTranslationsInitialized"));
         }
 
-        private class TranslationFiles
+        private TranslationFiles GetTranslationFiles(string languageOrSteamId)
         {
-            public string language;
-            public readonly Dictionary<string, string> translations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            public readonly Dictionary<int, string> itemIDTranslations = new Dictionary<int, string>();
-            public readonly Dictionary<string, string> itemShortNameTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            public readonly Dictionary<string, string> itemDisplayNameTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            public readonly Dictionary<string, string> deployableShortPrefabNameTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            public readonly Dictionary<string, string> holdableShortPrefabNameTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            public readonly Dictionary<string, string> monumentNameTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            public readonly Dictionary<string, string> constructionTranslations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        }
-
-        private TranslationFiles GetTranslationFiles(string language)
-        {
-            if (string.IsNullOrEmpty(language))
+            if (string.IsNullOrEmpty(languageOrSteamId))
+            {
+                languageOrSteamId = lang.GetServerLanguage();
+            }
+            else if (languageOrSteamId.Length == 17 && languageOrSteamId.IsSteamId())
+            {
+                languageOrSteamId = lang.GetLanguage(languageOrSteamId);
+            }
+            if (string.IsNullOrEmpty(languageOrSteamId))
             {
                 return null;
             }
-            if (language.Length == 17 && language.IsSteamId())
-            {
-                language = lang.GetLanguage(language);
-            }
             TranslationFiles translationFiles;
-            if (!_translationFilesMap.TryGetValue(language, out translationFiles))
+            if (!_translationFilesMap.TryGetValue(languageOrSteamId, out translationFiles))
             {
                 return null;
             }
@@ -130,7 +193,7 @@ namespace Oxide.Plugins
             }
             if (shortPrefabName.Contains('/') || shortPrefabName.Contains('\\'))
             {
-                shortPrefabName = Utility.GetFileNameWithoutExtension(shortPrefabName);
+                shortPrefabName = Path.GetFileNameWithoutExtension(shortPrefabName);
                 if (string.IsNullOrEmpty(shortPrefabName))
                 {
                     return false;
@@ -154,8 +217,7 @@ namespace Oxide.Plugins
         private void UpdateTranslations(TranslationFiles translationFiles)
         {
             Dictionary<string, string> translationsOverride;
-            if (_translationsOverride.TryGetValue(translationFiles.language, out translationsOverride) ||
-                _translationsOverride.TryGetValue(Wildcard, out translationsOverride))
+            if (_translationsOverride.TryGetValue(translationFiles.language, out translationsOverride) || _translationsOverride.TryGetValue(Wildcard, out translationsOverride))
             {
                 foreach (var entry in translationsOverride)
                 {
@@ -191,7 +253,11 @@ namespace Oxide.Plugins
                 else
                 {
                     string translation;
-                    var token = itemDefinition.shortname == "electric.generator.small" ? "Test generator" : itemDefinition.displayName.token;
+                    string token;
+                    if (!_configData.customItemToken.TryGetValue(itemDefinition.shortname, out token))
+                    {
+                        token = itemDefinition.displayName.token;
+                    }
                     if (translationFiles.translations.TryGetValue(token, out translation))
                     {
                         translationFiles.itemIDTranslations.Add(itemDefinition.itemid, translation);
@@ -203,7 +269,7 @@ namespace Oxide.Plugins
                     }
                     else
                     {
-                        PrintError($"No translation was found for the item: {itemDefinition.displayName.english}(shortname: {itemDefinition.shortname} | token: {token})");
+                        _logger.AppendLine($"No translation was found for the item: {itemDefinition.displayName.english}(shortname: {itemDefinition.shortname} | token: {token})");
                     }
                 }
             }
@@ -218,14 +284,17 @@ namespace Oxide.Plugins
             foreach (var itemDefinition in ItemManager.GetItemDefinitions())
             {
                 var translation = GetItemShortNameTranslation(translationFiles, itemDefinition.shortname);
-                if (string.IsNullOrEmpty(translation)) continue;
+                if (string.IsNullOrEmpty(translation))
+                {
+                    continue;
+                }
                 var itemModDeployable = itemDefinition.GetComponent<ItemModDeployable>();
                 if (itemModDeployable != null)
                 {
                     var prefabName = itemModDeployable.entityPrefab?.resourcePath;
                     if (!string.IsNullOrEmpty(prefabName))
                     {
-                        var shortPrefabName = Utility.GetFileNameWithoutExtension(prefabName);
+                        var shortPrefabName = Path.GetFileNameWithoutExtension(prefabName);
                         if (!string.IsNullOrEmpty(shortPrefabName))
                         {
                             if (!translationFiles.deployableShortPrefabNameTranslations.ContainsKey(shortPrefabName))
@@ -244,7 +313,7 @@ namespace Oxide.Plugins
                     {
                         if (!string.IsNullOrEmpty(heldEntity.PrefabName))
                         {
-                            var shortPrefabName = Utility.GetFileNameWithoutExtension(heldEntity.PrefabName);
+                            var shortPrefabName = Path.GetFileNameWithoutExtension(heldEntity.PrefabName);
                             if (!string.IsNullOrEmpty(shortPrefabName))
                             {
                                 if (!translationFiles.holdableShortPrefabNameTranslations.ContainsKey(shortPrefabName))
@@ -259,7 +328,7 @@ namespace Oxide.Plugins
                             var prefabName = thrownWeapon.prefabToThrow?.resourcePath;
                             if (!string.IsNullOrEmpty(prefabName))
                             {
-                                var shortPrefabName = Utility.GetFileNameWithoutExtension(prefabName);
+                                var shortPrefabName = Path.GetFileNameWithoutExtension(prefabName);
                                 if (!string.IsNullOrEmpty(shortPrefabName))
                                 {
                                     if (!translationFiles.holdableShortPrefabNameTranslations.ContainsKey(shortPrefabName))
@@ -285,7 +354,7 @@ namespace Oxide.Plugins
                 {
                     continue;
                 }
-                var shortPrefabName = Utility.GetFileNameWithoutExtension(monumentInfo.name);
+                var shortPrefabName = Path.GetFileNameWithoutExtension(monumentInfo.name);
                 if (isEnglish)
                 {
                     if (!translationFiles.monumentNameTranslations.ContainsKey(shortPrefabName))
@@ -306,7 +375,7 @@ namespace Oxide.Plugins
                     }
                     else
                     {
-                        PrintError($"No translation was found for the monument: {monumentInfo.displayPhrase.english}(name: {monumentInfo.name} : token: {token})");
+                        _logger.AppendLine($"No translation was found for the monument: {monumentInfo.displayPhrase.english}(name: {monumentInfo.name} : token: {token})");
                     }
                 }
             }
@@ -320,7 +389,7 @@ namespace Oxide.Plugins
                 var construction = entry.Value.Find<Construction>().FirstOrDefault();
                 if (construction != null && construction.deployable == null && construction.info.name.IsValid())
                 {
-                    var shortPrefabName = Utility.GetFileNameWithoutExtension(construction.fullName);
+                    var shortPrefabName = Path.GetFileNameWithoutExtension(construction.fullName);
                     if (isEnglish)
                     {
                         if (!translationFiles.constructionTranslations.ContainsKey(shortPrefabName))
@@ -341,7 +410,7 @@ namespace Oxide.Plugins
                         }
                         else
                         {
-                            PrintError($"No translation was found for the construction: {construction.info.name.english}(name: {construction.fullName} : token: {token})");
+                            _logger.AppendLine($"No translation was found for the construction: {construction.info.name.english}(name: {construction.fullName} : token: {token})");
                         }
                     }
                 }
@@ -353,11 +422,114 @@ namespace Oxide.Plugins
 
         #endregion Methods
 
+        #region Download
+
+        private class TranslationsDownloader
+        {
+            private const string TranslationsDownloadUrl = "https://crowdin.com/backend/download/project/rust.zip";
+
+            private bool _downloaded;
+            private Coroutine _downloadCoroutine;
+
+            public void Initialize()
+            {
+                if (!_downloaded && !IsDownloading())
+                {
+                    StartDownload();
+                }
+            }
+
+            public bool IsDownloading()
+            {
+                return _downloadCoroutine != null;
+            }
+
+            public void StopDownload()
+            {
+                if (IsDownloading())
+                {
+                    MainCamera.Instance.StopCoroutine(_downloadCoroutine);
+                }
+            }
+
+            public void StartDownload()
+            {
+                StopDownload();
+                _downloadCoroutine = MainCamera.Instance.StartCoroutine(DownloadTranslations());
+            }
+
+            private IEnumerator DownloadTranslations()
+            {
+                _instance?.Puts("Start downloading the translation files.");
+                using (var unityWebRequest = UnityWebRequest.Get(TranslationsDownloadUrl))
+                {
+                    unityWebRequest.timeout = 300;
+                    var asyncOperation = unityWebRequest.SendWebRequest();
+                    float timer = 0;
+                    int lastProgress = 0;
+                    while (!asyncOperation.isDone)
+                    {
+                        timer += Time.deltaTime;
+                        if (timer >= 5f)
+                        {
+                            timer = 0;
+                            var progress = Mathf.FloorToInt(asyncOperation.progress * 100);
+                            if (progress != lastProgress)
+                            {
+                                lastProgress = progress;
+                                _instance?.Puts($"Downloading translation files: {progress}%");
+                            }
+                        }
+                        yield return null;
+                    }
+
+                    if (unityWebRequest.isNetworkError || unityWebRequest.isHttpError)
+                    {
+                        _instance?.OnTranslationsDownloadFailed();
+                        _instance?.PrintError($"Failed to download translations files. Code: {unityWebRequest.responseCode}. Error: {unityWebRequest.error}");
+                        _downloadCoroutine = null;
+                        yield break;
+                    }
+                    var extractDirectory = GetTranslationsPath();
+                    if (!Directory.Exists(extractDirectory))
+                    {
+                        Directory.CreateDirectory(extractDirectory);
+                    }
+
+                    var translationsZipPath = GetDownloadFilePath();
+                    File.WriteAllBytes(translationsZipPath, unityWebRequest.downloadHandler.data);
+
+                    using (var zip = ZipFile.Read(translationsZipPath, new ReadOptions { Encoding = Encoding.Default }))
+                    {
+                        foreach (var entry in zip)
+                        {
+                            entry.Extract(extractDirectory, ExtractExistingFileAction.OverwriteSilently);
+                        }
+                    }
+                    // ZipFile.ExtractToDirectory(translationsZipPath, extractDirectory, true);
+                    //File.Delete(translationsZipPath);
+                    _instance?.Puts($"Translation files were successfully downloaded({unityWebRequest.downloadedBytes / (1024f * 1024f):0.00}MB) and extracted to '{extractDirectory}'.");
+                    _instance?.OnTranslationsDownloaded();
+                    _downloaded = true;
+                }
+
+                _downloadCoroutine = null;
+            }
+        }
+
+        #endregion Download
+
         #region API
 
-        private bool IsInitialized() => _translationsInitialized;
+        private bool IsInitialized()
+        {
+            return _translationsInitialized;
+        }
 
-        private bool IsSupportedLanguage(string language) => SupportedLanguages.Contains(language, StringComparer.OrdinalIgnoreCase);
+        private bool IsSupportedLanguage(string language)
+        {
+            return SupportedLanguages.Contains(language, StringComparer.OrdinalIgnoreCase);
+        }
 
         #region Translation
 
@@ -371,18 +543,11 @@ namespace Oxide.Plugins
         private string GetSerializedTranslationsFiles(string language)
         {
             var translationFiles = GetTranslationFiles(language);
-            if (translationFiles == null) return null;
+            if (translationFiles == null)
+            {
+                return null;
+            }
             return JsonConvert.SerializeObject(translationFiles);
-            //JObject jObject = new JObject();
-            //jObject["Translations"] = JsonConvert.SerializeObject(translationFiles.translations);
-            //jObject["ItemIDTranslations"] = JsonConvert.SerializeObject(translationFiles.itemIDTranslations);
-            //jObject["ItemShortNameTranslations"] = JsonConvert.SerializeObject(translationFiles.itemShortNameTranslations);
-            //jObject["ItemDisplayNameTranslations"] = JsonConvert.SerializeObject(translationFiles.itemDisplayNameTranslations);
-            //jObject["DeployableShortPrefabNameTranslations"] = JsonConvert.SerializeObject(translationFiles.deployableShortPrefabNameTranslations);
-            //jObject["HoldableShortPrefabNameTranslations"] = JsonConvert.SerializeObject(translationFiles.holdableShortPrefabNameTranslations);
-            //jObject["MonumentNameTranslations"] = JsonConvert.SerializeObject(translationFiles.monumentNameTranslations);
-            //jObject["ConstructionTranslations"] = JsonConvert.SerializeObject(translationFiles.constructionTranslations);
-            //return jObject;
         }
 
         private Dictionary<string, string> GetTranslations(string language)
@@ -431,13 +596,19 @@ namespace Oxide.Plugins
 
         private string GetTranslation(string language, Translate.Phrase phrase)
         {
-            if (!phrase.IsValid()) return null;
+            if (!phrase.IsValid())
+            {
+                return null;
+            }
             return GetTranslation(language, phrase.token);
         }
 
         private string GetTranslation(string language, string token)
         {
-            if (string.IsNullOrEmpty(token)) return null;
+            if (string.IsNullOrEmpty(token))
+            {
+                return null;
+            }
             var translationFiles = GetTranslationFiles(language);
             if (translationFiles == null)
             {
@@ -472,7 +643,10 @@ namespace Oxide.Plugins
 
         private string GetItemTranslationByDisplayName(string language, string displayName)
         {
-            if (string.IsNullOrEmpty(displayName)) return null;
+            if (string.IsNullOrEmpty(displayName))
+            {
+                return null;
+            }
             var translationFiles = GetTranslationFiles(language);
             if (translationFiles == null)
             {
@@ -488,13 +662,19 @@ namespace Oxide.Plugins
 
         private string GetItemTranslationByDefinition(string language, ItemDefinition itemDefinition)
         {
-            if (itemDefinition == null) return null;
+            if (itemDefinition == null)
+            {
+                return null;
+            }
             return GetItemTranslationByShortName(language, itemDefinition.shortname);
         }
 
         private string GetItemTranslationByShortName(string language, string itemShortName)
         {
-            if (string.IsNullOrEmpty(itemShortName)) return null;
+            if (string.IsNullOrEmpty(itemShortName))
+            {
+                return null;
+            }
             var translationFiles = GetTranslationFiles(language);
             if (translationFiles == null)
             {
@@ -506,7 +686,7 @@ namespace Oxide.Plugins
 
         #endregion Item Translation
 
-        #region Deployable And Holdable Translation
+        #region Deployable & Holdable Translation
 
         private string GetDeployableTranslation(string language, string deployable)
         {
@@ -546,13 +726,16 @@ namespace Oxide.Plugins
             return translation;
         }
 
-        #endregion Deployable And Holdable Translation
+        #endregion Deployable & Holdable Translation
 
         #region Monument Translation
 
         private string GetMonumentTranslation(string language, MonumentInfo monumentInfo)
         {
-            if (monumentInfo == null) return null;
+            if (monumentInfo == null)
+            {
+                return null;
+            }
             return GetMonumentTranslation(language, monumentInfo.name);
         }
 
@@ -581,7 +764,10 @@ namespace Oxide.Plugins
 
         private string GetConstructionTranslation(string language, Construction construction)
         {
-            if (construction == null) return null;
+            if (construction == null)
+            {
+                return null;
+            }
             return GetConstructionTranslation(language, construction.fullName);
         }
 
@@ -610,18 +796,49 @@ namespace Oxide.Plugins
 
         #endregion API
 
+        #region Commands
+
+        [ConsoleCommand("translations")]
+        private void CCmdTranslations(ConsoleSystem.Arg arg)
+        {
+            if (!arg.IsAdmin)
+            {
+                return;
+            }
+            if (arg.HasArgs())
+            {
+                if (_downloader.IsDownloading())
+                {
+                    _downloader.StopDownload();
+                    Interface.Oxide.LogWarning("Stop downloading the translation files.");
+                    return;
+                }
+                Interface.Oxide.LogWarning("You haven't started downloading the translation files yet.");
+                return;
+            }
+            _downloader.StartDownload();
+        }
+
+        #endregion Commands
+
         #region ConfigurationFile
 
-        private ConfigData configData;
+        private ConfigData _configData;
 
         private class ConfigData
         {
+            [JsonProperty(PropertyName = "Custom item token", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+            public readonly Dictionary<string, string> customItemToken = new Dictionary<string, string>
+            {
+                ["electric.generator.small"] = "Test generator"
+            };
+
             [JsonProperty(PropertyName = "Translations override", ObjectCreationHandling = ObjectCreationHandling.Replace)]
-            public Dictionary<string, Dictionary<string, string>> translationsOverride = new Dictionary<string, Dictionary<string, string>>
+            public readonly Dictionary<string, Dictionary<string, string>> translationsOverride = new Dictionary<string, Dictionary<string, string>>
             {
                 ["zh-CN"] = new Dictionary<string, string>
                 {
-                    ["fogmachine"] = "喷雾机",
+                    ["fogmachine"] = "喷雾机"
                 }
             };
         }
@@ -631,8 +848,8 @@ namespace Oxide.Plugins
             base.LoadConfig();
             try
             {
-                configData = Config.ReadObject<ConfigData>();
-                if (configData == null)
+                _configData = Config.ReadObject<ConfigData>();
+                if (_configData == null)
                 {
                     LoadDefaultConfig();
                 }
@@ -642,10 +859,12 @@ namespace Oxide.Plugins
                 PrintError($"The configuration file is corrupted. \n{ex}");
                 LoadDefaultConfig();
             }
-
-            foreach (var entry in configData.translationsOverride)
+            if (_configData != null)
             {
-                _translationsOverride.Add(entry.Key, entry.Value);
+                foreach (var entry in _configData.translationsOverride)
+                {
+                    _translationsOverride.Add(entry.Key, entry.Value);
+                }
             }
             SaveConfig();
         }
@@ -653,25 +872,57 @@ namespace Oxide.Plugins
         protected override void LoadDefaultConfig()
         {
             PrintWarning("Creating a new configuration file");
-            configData = new ConfigData();
+            _configData = new ConfigData();
         }
 
         protected override void SaveConfig()
         {
-            Config.WriteObject(configData);
+            Config.WriteObject(_configData);
         }
 
         #endregion ConfigurationFile
 
         #region DataFile
 
-        private static string FormatPath(string language, string filename) => $"Translations\\{language}\\{filename}";
+        private static string GetTranslationsLangFilePath(string language, string filename)
+        {
+            return $"Translations\\{language}\\{filename}";
+        }
 
-        private static T LoadData<T>(string language, string filename) => Interface.Oxide.DataFileSystem.ReadObject<T>(FormatPath(language, filename));
+        private static T LoadData<T>(string language, string filename)
+        {
+            return Interface.Oxide.DataFileSystem.ReadObject<T>(GetTranslationsLangFilePath(language, filename));
+        }
 
-        private static bool ExistsDatafile(string language, string filename) => Interface.Oxide.DataFileSystem.ExistsDatafile(FormatPath(language, filename));
+        private static bool ExistsDatafile(string language, string filename)
+        {
+            return Interface.Oxide.DataFileSystem.ExistsDatafile(GetTranslationsLangFilePath(language, filename));
+        }
 
-        private static void SaveData<T>(string language, string filename, T data) => Interface.Oxide.DataFileSystem.WriteObject(FormatPath(language, filename), data);
+        private static void SaveData<T>(string language, string filename, T data)
+        {
+            Interface.Oxide.DataFileSystem.WriteObject(GetTranslationsLangFilePath(language, filename), data);
+        }
+
+        private static string GetTranslationsPath()
+        {
+            return Path.Combine(Interface.Oxide.DataFileSystem.Directory, "Translations");
+        }
+
+        private static string GetDownloadFilePath()
+        {
+            return Path.Combine(Interface.Oxide.DataFileSystem.Directory, "Rust (translations).zip");
+        }
+
+        private static bool IsTranslationsExists()
+        {
+            var path = GetTranslationsPath();
+            if (!Directory.Exists(path))
+            {
+                return false;
+            }
+            return Directory.GetDirectories(path).Length > 1; // exclude en folder
+        }
 
         #endregion DataFile
     }
