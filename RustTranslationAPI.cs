@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json;
+using Oxide.Core;
 using UnityEngine;
 
 namespace Oxide.Plugins;
@@ -24,14 +25,16 @@ public class RustTranslationAPI : RustPlugin
     private readonly Dictionary<string, string> _displayNameTokens = new();
     private readonly Dictionary<string, string> _holdableTokens = new();
     private readonly Dictionary<string, string> _monumentTokens = new();
+    private readonly Dictionary<uint, string> _prefabTokens = new();
+    private bool _isInitialized;
 
-    public enum LogLevel
+    public enum LogLevel : byte
     {
         Off = 0,
         Error = 1,
         Warning = 2,
         Info = 3,
-        Debug = 4,
+        Debug = 4
     }
 
     #endregion Class Fields
@@ -44,7 +47,9 @@ public class RustTranslationAPI : RustPlugin
         ProcessTranslations();
         ProcessItems();
         ProcessMonuments();
-        ProcessConstruction();
+        ProcessAttributes();
+        _isInitialized = true;
+        NextTick(() => Interface.CallHook("OnTranslationsInitialized"));
         Log("OnServerInitialized: finish", LogLevel.Debug);
     }
 
@@ -90,7 +95,7 @@ public class RustTranslationAPI : RustPlugin
 
         foreach ((string path, AssetBundle bundle) in files!)
         {
-            if (!path.EndsWith(".json"))
+            if (!path.EndsWith(".json") || !path.StartsWith("assets/localization/"))
             {
                 continue;
             }
@@ -103,7 +108,7 @@ public class RustTranslationAPI : RustPlugin
 
                 if (!_languages.TryGetValue(language, out Dictionary<string, string> tokens))
                 {
-                    _languages[language] = tokens = new();
+                    _languages[language] = tokens = new Dictionary<string, string>();
                     Log($"Added language: {language}", LogLevel.Debug);
                 }
 
@@ -116,7 +121,7 @@ public class RustTranslationAPI : RustPlugin
             }
         }
 
-        Log($"Loaded {_languages.Count} languages", LogLevel.Debug);
+        Log($"Loaded {_languages.Count} languages.\n{string.Join(", ", _languages.Keys)}", LogLevel.Debug);
     }
 
     public void ProcessItems()
@@ -124,50 +129,39 @@ public class RustTranslationAPI : RustPlugin
         foreach (ItemDefinition def in ItemManager.GetItemDefinitions())
         {
             _displayNameTokens[def.displayName.english] = def.displayName.token;
-            if (def.GetComponent<ItemModDeployable>() is { } itemModDeployable)
+            BaseEntity deployableEntity = def.GetComponent<ItemModDeployable>()?.entityPrefab.GetEntity();
+            if (deployableEntity)
             {
-                string prefabName = itemModDeployable.entityPrefab?.resourcePath;
-                if (!string.IsNullOrEmpty(prefabName))
+                _deployableTokens[deployableEntity.ShortPrefabName] = def.displayName.token;
+                _prefabTokens[deployableEntity.prefabID] = def.displayName.token;
+            }
+            
+            HeldEntity heldEntity = def.GetComponent<ItemModEntity>()?.entityPrefab?.Get()?.GetComponent<HeldEntity>();
+            if (heldEntity&& heldEntity is not Planner && heldEntity is not Deployer)
+            {
+                _holdableTokens[heldEntity.ShortPrefabName] = def.displayName.token;
+                _prefabTokens[heldEntity.prefabID] = def.displayName.token;
+                if (heldEntity is ThrownWeapon thrownWeapon)
                 {
-                    string shortPrefabName = Path.GetFileNameWithoutExtension(prefabName);
-                    if (!string.IsNullOrEmpty(shortPrefabName))
-                    {
-                        _deployableTokens[shortPrefabName] = def.displayName.token;
-                    }
+                    BaseEntity thrownEntity = thrownWeapon.prefabToThrow.GetEntity();
+                    _holdableTokens[thrownEntity.ShortPrefabName] = def.displayName.token;
+                    _prefabTokens[thrownEntity.prefabID] = def.displayName.token;
                 }
             }
-
-            if (def.GetComponent<ItemModEntity>() is { } itemModEntity)
+            
+            PoweredLightsDeployer poweredLights = def.GetComponent<ItemModEntity>()?.entityPrefab?.Get()?.GetComponent<PoweredLightsDeployer>();
+            if (poweredLights)
             {
-                HeldEntity heldEntity = itemModEntity.entityPrefab?.Get()?.GetComponent<HeldEntity>();
-                if (heldEntity && heldEntity is not Planner && heldEntity is not Deployer)
+                _holdableTokens[poweredLights.ShortPrefabName] = def.displayName.token;
+                _prefabTokens[poweredLights.prefabID] = def.displayName.token;
+
+                BaseEntity lights = poweredLights.poweredLightsPrefab.GetEntity();
+                if (lights)
                 {
-                    if (!string.IsNullOrEmpty(heldEntity.PrefabName))
-                    {
-                        string shortPrefabName = Path.GetFileNameWithoutExtension(heldEntity.PrefabName);
-                        if (!string.IsNullOrEmpty(shortPrefabName))
-                        {
-                            _holdableTokens[shortPrefabName] = def.displayName.token;
-                        }
-                    }
-                    ThrownWeapon thrownWeapon = heldEntity as ThrownWeapon;
-                    if (thrownWeapon)
-                    {
-                        string prefabName = thrownWeapon.prefabToThrow?.resourcePath;
-                        if (!string.IsNullOrEmpty(prefabName))
-                        {
-                            string shortPrefabName = Path.GetFileNameWithoutExtension(prefabName);
-                            if (!string.IsNullOrEmpty(shortPrefabName))
-                            {
-                                _holdableTokens[shortPrefabName] = def.displayName.token;
-                            }
-                        }
-                    }
+                    _prefabTokens[lights.prefabID] = def.displayName.token;
                 }
             }
         }
-
-        Log($"Loaded {_displayNameTokens.Count} display names", LogLevel.Debug);
     }
 
     public void ProcessMonuments()
@@ -180,11 +174,9 @@ public class RustTranslationAPI : RustPlugin
                 _monumentTokens[shortPrefabName] = monumentInfo.displayPhrase.token;
             }
         }
-
-        Log($"Loaded {_monumentTokens.Count} monuments", LogLevel.Debug);
     }
 
-    public void ProcessConstruction()
+    public void ProcessAttributes()
     {
         foreach (PrefabAttribute.AttributeCollection attributes in PrefabAttribute.server.prefabs.Values)
         {
@@ -193,62 +185,69 @@ public class RustTranslationAPI : RustPlugin
             {
                 string shortPrefabName = Path.GetFileNameWithoutExtension(construction.fullName);
                 _constructionTokens[shortPrefabName] = construction.info.name.token;
+                _prefabTokens[construction.prefabID] = construction.info.name.token;
+            }
+            
+            PrefabInformation prefabInfo =  attributes.Find<PrefabInformation>().FirstOrDefault();
+            if (prefabInfo)
+            {
+                _prefabTokens[prefabInfo!.prefabID] = prefabInfo.title.token;
             }
         }
-
-        Log($"Loaded {_constructionTokens.Count} constructions", LogLevel.Debug);
     }
 
     #endregion Core Methods
 
     #region API Methods
 
+    private bool IsInitialized() => _isInitialized;
+    private bool IsSupportedLanguage(string language) => _languages.ContainsKey(language);
+    
     private string GetTranslation(string language, string token)
     {
-        if (!string.IsNullOrEmpty(language) && !string.IsNullOrEmpty(token) &&
-            _languages.TryGetValue(language, out Dictionary<string, string> tokens) &&
-            tokens.TryGetValue(token, out string translation))
+        if (!string.IsNullOrEmpty(language) && !string.IsNullOrEmpty(token) && _languages.TryGetValue(language, out Dictionary<string, string> tokens) && tokens.TryGetValue(token, out string translation))
         {
             return translation;
         }
-        return string.Empty;
+
+        return null;
     }
 
-    private string GetTranslation(string language, Translate.Phrase token)
-        => GetTranslation(language, token?.token ?? string.Empty);
+    private string GetLanguage(BasePlayer player) => player?.net.connection.info.GetString("global.language", "en") ?? "en";
 
-    private string GetItemTranslationByID(string language, int itemID)
-        => GetItemTranslationByDefinition(language, ItemManager.FindItemDefinition(itemID));
-
-    private string GetItemTranslationByDisplayName(string language, string displayName)
-        => _displayNameTokens.TryGetValue(displayName, out string token) ? GetTranslation(language, token) : string.Empty;
-
-    private string GetItemTranslationByDefinition(string language, ItemDefinition def)
-        => GetTranslation(language, def?.displayName.token ?? string.Empty);
-
-    private string GetItemTranslationByShortName(string language, string itemShortName)
-        => GetItemTranslationByDefinition(language, ItemManager.FindItemDefinition(itemShortName));
-
-    private string GetPrefabTranslation(string language, uint prefabId)
-        => GetTranslation(language, PrefabAttribute.server.Find<PrefabInformation>(prefabId)?.title.token ?? string.Empty);
-
-    private string GetTranslation(string language, BaseEntity entity)
-        => entity.IsValid() ? GetPrefabTranslation(language, entity.prefabID) : string.Empty;
-
-    private string GetDeployableTranslation(string language, string deployable)
-        => _deployableTokens.TryGetValue(deployable, out string token) ? GetTranslation(language, token) : string.Empty;
-
-    private string GetHoldableTranslation(string language, string holdable)
-        => _holdableTokens.TryGetValue(holdable, out string token) ? GetTranslation(language, token) : string.Empty;
-
-    private string GetMonumentTranslation(string language, MonumentInfo monument)
-        => GetTranslation(language, monument?.displayPhrase.token ?? string.Empty);
-
-    private string GetMonumentTranslation(string language, string monumentName)
-        => _monumentTokens.TryGetValue(monumentName, out string token) ? GetTranslation(language, token) : string.Empty;
-
-    private string GetConstructionTranslation(string language, string constructionName)
-        => _constructionTokens.TryGetValue(constructionName, out string token) ? GetTranslation(language, token) : string.Empty;
+    private string GetTranslation(string language, Translate.Phrase token) => GetTranslation(language, token?.token);
+    private string GetTranslation(BasePlayer player, Translate.Phrase token) => GetTranslation(GetLanguage(player), token?.token);
+    private string GetTranslation(string language, Item item) => GetTranslation(language, item?.info);
+    private string GetTranslation(BasePlayer player, Item item) => GetTranslation(GetLanguage(player), item);
+    private string GetTranslation(string language, ItemDefinition def) => GetTranslation(language, def?.displayName);
+    private string GetTranslation(BasePlayer player, ItemDefinition def) => GetTranslation(GetLanguage(player), def);
+    
+    private string GetTranslation(string language, BaseEntity entity) => GetPrefabTranslation(language, entity.prefabID);
+    private string GetTranslation(BasePlayer player, BaseEntity entity) => GetPrefabTranslation(player, entity.prefabID);
+    private string GetTranslation(string language, MonumentInfo monument) => GetTranslation(language, monument?.displayPhrase);
+    private string GetTranslation(BasePlayer player, MonumentInfo monument) => GetTranslation(GetLanguage(player), monument);
+    
+    private string GetTranslation(string language, Construction construction) => GetTranslation(language, construction?.info.name.token);
+    private string GetTranslation(BasePlayer player, Construction monument) => GetTranslation(GetLanguage(player), monument);
+    private string GetPrefabTranslation(string language, uint prefabId) => _prefabTokens.TryGetValue(prefabId, out string token) ? GetTranslation(language, token) : null;
+    private string GetPrefabTranslation(BasePlayer player, uint prefabId) => _prefabTokens.TryGetValue(prefabId, out string token) ? GetTranslation(GetLanguage(player), token) : null;
+    
+    private string GetItemDescriptionByID(string language, int itemID) => GetItemDescriptionByDefinition(language, ItemManager.FindItemDefinition(itemID));
+    private string GetItemDescriptionByID(BasePlayer player, int itemID) => GetItemDescriptionByID(GetLanguage(player), itemID);
+    private string GetItemDescriptionByDefinition(string language, ItemDefinition def) => GetTranslation(language, def?.displayDescription);
+    private string GetItemDescriptionByDefinition(BasePlayer player, ItemDefinition def) => GetItemDescriptionByDefinition(GetLanguage(player), def);
+    
+    private string GetItemTranslationByID(string language, int itemID) => GetTranslation(language, ItemManager.FindItemDefinition(itemID));
+    private string GetItemTranslationByDisplayName(string language, string displayName) => _displayNameTokens.TryGetValue(displayName, out string token) ? GetTranslation(language, token) : null;
+    private string GetItemTranslationByDefinition(string language, ItemDefinition def) => GetTranslation(language, def);
+    private string GetItemTranslationByShortName(string language, string itemShortName) => GetTranslation(language, ItemManager.FindItemDefinition(itemShortName));
+    
+    private string GetDeployableTranslation(string language, string deployable) => _deployableTokens.TryGetValue(deployable, out string token) ? GetTranslation(language, token) : null;
+    private string GetHoldableTranslation(string language, string holdable) => _holdableTokens.TryGetValue(holdable, out string token) ? GetTranslation(language, token) : null;
+    private string GetMonumentTranslation(string language, string monumentName) => _monumentTokens.TryGetValue(monumentName, out string token) ? GetTranslation(language, token) : null;
+    private string GetMonumentTranslation(string language, MonumentInfo monumentInfo) => GetTranslation(language, monumentInfo);
+    private string GetConstructionTranslation(string language, string constructionName) => _constructionTokens.TryGetValue(constructionName, out string token) ? GetTranslation(language, token) : null;
+    private string GetConstructionTranslation(string language, Construction construction) => GetTranslation(language, construction);
 
     #endregion API Methods
 
@@ -277,7 +276,7 @@ public class RustTranslationAPI : RustPlugin
                 break;
         }
 
-        if ((int)_pluginConfig.LoggingLevel >= (int)level)
+        if (_pluginConfig.LoggingLevel >= level)
         {
             LogToFile(filename, message, this);
         }
