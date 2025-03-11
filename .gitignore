@@ -8,7 +8,7 @@
 *.suo
 *.user
 *.userosscache
-*.sln.docstates
+*.sln*
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
@@ -84,7 +84,7 @@ StyleCopReport.xml
 *.tlh
 *.tmp
 *.tmp_proj
-*_wpftmp.csproj
+*.csproj
 *.log
 *.vspscc
 *.vssscc
@@ -349,5 +349,7 @@ MigrationBackup/
 # Ionide (cross platform F# VS Code tools) working folder
 .ionide/
 
-.idea/*
-**/.idea/*
+.idea/
+**/.idea/
+
+.vscode/
