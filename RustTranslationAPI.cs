@@ -68,7 +68,7 @@ public class RustTranslationAPI : RustPlugin
     {
         [JsonConverter(typeof(StringEnumConverter))]
         [DefaultValue(LogLevel.Off)]
-        [JsonProperty(PropertyName = "Log Level (Debug, Info, Warning, Error, Off)", Order = 4)]
+        [JsonProperty(PropertyName = "Log Level (Debug, Info, Warning, Error, Off)")]
         public LogLevel LoggingLevel { get; set; }
     }
 
