@@ -8,6 +8,14 @@ This plugin offers a straightforward translation API, making it especially helpf
 
 For plugins that integrate with RustTranslationAPI, manual translation of items, holdables, and deployables is no longer necessary. This plugin handles it all seamlessly.
 
+## Configuration
+
+```json
+{
+  "Log Level (Debug, Info, Warning, Error, Off)": "Off"
+}
+```
+
 ## Developer Hooks
 
 ```csharp
