@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins;
 
-[Info("Rust Translation API", "MJSU", "2.0.1")]
+[Info("Rust Translation API", "MJSU", "2.0.2")]
 [Description("Provides translations for Rust entities & items")]
 public class RustTranslationAPI : RustPlugin
 {
@@ -146,19 +146,6 @@ public class RustTranslationAPI : RustPlugin
                     BaseEntity thrownEntity = thrownWeapon.prefabToThrow.GetEntity();
                     _holdableTokens[thrownEntity.ShortPrefabName] = def.displayName.token;
                     _prefabTokens[thrownEntity.prefabID] = def.displayName.token;
-                }
-            }
-            
-            PoweredLightsDeployer poweredLights = def.GetComponent<ItemModEntity>()?.entityPrefab?.Get()?.GetComponent<PoweredLightsDeployer>();
-            if (poweredLights)
-            {
-                _holdableTokens[poweredLights.ShortPrefabName] = def.displayName.token;
-                _prefabTokens[poweredLights.prefabID] = def.displayName.token;
-
-                BaseEntity lights = poweredLights.poweredLightsPrefab.GetEntity();
-                if (lights)
-                {
-                    _prefabTokens[lights.prefabID] = def.displayName.token;
                 }
             }
         }
