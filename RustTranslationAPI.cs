@@ -106,6 +106,11 @@ public class RustTranslationAPI : RustPlugin
                 int secondLastIndex = path.LastIndexOf('/', lastIndex - 1) + 1;
                 string language = path[secondLastIndex..lastIndex];
 
+                if (language.Equals("editor", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                
                 if (!_languages.TryGetValue(language, out Dictionary<string, string> tokens))
                 {
                     _languages[language] = tokens = new Dictionary<string, string>();
