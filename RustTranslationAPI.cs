@@ -30,11 +30,11 @@ public class RustTranslationAPI : RustPlugin
 
     public enum LogLevel : byte
     {
-        Off = 0,
-        Error = 1,
-        Warning = 2,
-        Info = 3,
-        Debug = 4
+        Off,
+        Error,
+        Warning,
+        Info,
+        Debug
     }
 
     #endregion Class Fields
